@@ -1,0 +1,314 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TV Hub</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #050506; color: #ecebe6; overflow: hidden;
+    font-family: "Segoe UI", "Helvetica Neue", Roboto, Arial, sans-serif; cursor: none; }
+  #wrap { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; }
+  #glow { display: none; position: absolute; left: 50%; top: 42%; width: 120vh; height: 120vh; margin: -60vh 0 0 -60vh;
+    border-radius: 50%; background: radial-gradient(circle, rgba(233,212,170,.07) 0%, rgba(0,0,0,0) 60%); }
+  #main { position: absolute; left: 8vw; right: 8vw; top: 21vh; }
+  #time { font-size: 24vh; font-weight: 300; letter-spacing: -.02em; line-height: 1; font-variant-numeric: tabular-nums; }
+  #ampm { font-size: 6vh; font-weight: 300; margin-left: 1.5vw; color: #8f8d86; vertical-align: 3vh; }
+  #date { font-size: 5vh; font-weight: 300; color: #b9b6ad; margin-top: 3vh; }
+  #weather { position: absolute; left: 8vw; right: 8vw; bottom: 9vh; display: table; width: 84vw; }
+  .now, .days { display: table-cell; vertical-align: bottom; }
+  .now { width: 40%; }
+  .now .row { white-space: nowrap; }
+  .now svg { width: 11vh; height: 11vh; vertical-align: middle; margin-right: 2vw; }
+  .temp { font-size: 11vh; font-weight: 300; vertical-align: middle; }
+  .cond { font-size: 3.2vh; color: #b9b6ad; margin-top: 1.2vh; }
+  .place { font-size: 2.4vh; color: #6f6d67; margin-top: .8vh; letter-spacing: .08em; text-transform: uppercase; }
+  .days { text-align: right; }
+  .day { display: inline-block; width: 11vw; text-align: center; margin-left: 1.5vw; padding: 2vh 0;
+    border-radius: 2vh; background: rgba(255,255,255,.035); }
+  .day .n { font-size: 2.4vh; color: #8f8d86; letter-spacing: .06em; text-transform: uppercase; }
+  .day svg { width: 6vh; height: 6vh; margin: 1.2vh 0; }
+  .day .hl { font-size: 2.8vh; }
+  .day .lo { color: #6f6d67; margin-left: .6vw; }
+  .day .rain { font-size: 2vh; color: #7fa6c9; margin-top: .6vh; }
+  svg { fill: none; stroke: #ecebe6; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+  #sky { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; transition: background 60s linear; }
+  #fx { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; }
+  #shade { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh;
+    background: linear-gradient(to top, rgba(0,0,0,.55) 0%, rgba(0,0,0,.05) 45%, rgba(0,0,0,.25) 100%); }
+  #flash { position: absolute; left: 0; top: 0; width: 100vw; height: 100vh; background: #dfe6ff; opacity: 0; transition: opacity .12s; }
+  #stale { position: absolute; right: 8vw; top: 6vh; font-size: 2vh; color: #6f6d67; }
+</style>
+</head>
+<body>
+<div id="sky"></div>
+<canvas id="fx"></canvas>
+<div id="shade"></div>
+<div id="flash"></div>
+<div id="wrap">
+  <div id="glow"></div>
+  <div id="stale"></div>
+  <div id="main">
+    <div><span id="time">--:--</span><span id="ampm"></span></div>
+    <div id="date"></div>
+  </div>
+  <div id="weather">
+    <div class="now" id="now"></div>
+    <div class="days" id="days"></div>
+  </div>
+</div>
+<script>
+// Written in plain ES5 so it runs on older TV browsers.
+var LAT = -34.05, LON = 150.76, PLACE = "Mount Annan";
+var TZ = "Australia/Sydney";
+var DAYS = ["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+var MONTHS = ["January","February","March","April","May","June","July","August","September","October","November","December"];
+
+function sydneyParts() {
+  var d = new Date();
+  try {
+    var f = new Intl.DateTimeFormat("en-AU", { timeZone: TZ, hour: "numeric", minute: "2-digit", hour12: true,
+      weekday: "long", day: "numeric", month: "long", year: "numeric" });
+    var out = {};
+    var parts = f.formatToParts(d);
+    for (var i = 0; i < parts.length; i++) out[parts[i].type] = parts[i].value;
+    return { h: out.hour, m: out.minute, ap: (out.dayPeriod || "").toLowerCase(), wd: out.weekday, day: out.day, mon: out.month, yr: out.year };
+  } catch (e) {
+    var h = d.getHours(), ap = h >= 12 ? "pm" : "am"; h = h % 12 || 12;
+    return { h: String(h), m: (d.getMinutes() < 10 ? "0" : "") + d.getMinutes(), ap: ap,
+      wd: DAYS[d.getDay()], day: String(d.getDate()), mon: MONTHS[d.getMonth()], yr: String(d.getFullYear()) };
+  }
+}
+
+function tick() {
+  var p = sydneyParts();
+  document.getElementById("time").textContent = p.h + ":" + p.m;
+  document.getElementById("ampm").textContent = p.ap;
+  document.getElementById("date").textContent = p.wd + ", " + p.day + " " + p.mon;
+}
+
+// --- weather icons (WMO weather codes from Open-Meteo)
+function icon(code, night) {
+  if (night && code <= 1) return '<svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>';
+  var sun = '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>';
+  var cloud = '<path d="M7 18h10a4 4 0 0 0 .4-8A6 6 0 0 0 6 9.5 4.3 4.3 0 0 0 7 18z"/>';
+  var part = '<path d="M8 5.5V4M3.6 7.6 2.5 6.5M3 12H1.5M13.5 6.5l-1 1"/><path d="M5.2 11a3.5 3.5 0 0 1 6.6-1.8"/><path d="M9 20h9a3.5 3.5 0 0 0 .3-7 5 5 0 0 0-9.6 1.5A2.8 2.8 0 0 0 9 20z"/>';
+  var rain = cloud + '<path d="M9 21l-1 2M13 21l-1 2M17 21l-1 2"/>';
+  var storm = cloud + '<path d="m12 19-2 3h3l-2 3"/>';
+  var fog = '<path d="M4 9h16M3 13h18M5 17h14"/>';
+  var s = code === 0 ? sun : code <= 2 ? part : code === 3 ? cloud : code <= 48 ? fog :
+          code <= 67 || (code >= 80 && code <= 82) ? rain : code <= 77 ? cloud : code >= 95 ? storm : rain;
+  return '<svg viewBox="0 0 24 24">' + s + '</svg>';
+}
+function words(code) {
+  if (code === 0 || code === 1) return "Clear";
+  if (code <= 2) return "Partly cloudy";
+  if (code === 3) return "Cloudy";
+  if (code <= 48) return "Fog";
+  if (code <= 57) return "Drizzle";
+  if (code <= 67) return "Rain";
+  if (code <= 77) return "Snow";
+  if (code <= 82) return "Showers";
+  if (code >= 95) return "Thunderstorms";
+  return "Rain";
+}
+
+function render(w, fetchedAt) {
+  var c = w.current, d = w.daily;
+  var night = DEMO ? /^night/.test(DEMO) : c.is_day === 0;
+  document.getElementById("now").innerHTML =
+    '<div class="row">' + icon(c.weather_code, night) + '<span class="temp">' + Math.round(c.temperature_2m) + '°</span></div>' +
+    '<div class="cond">' + words(c.weather_code) + ' · feels ' + Math.round(c.apparent_temperature) + '° · H ' +
+      Math.round(d.temperature_2m_max[0]) + '° L ' + Math.round(d.temperature_2m_min[0]) + '°</div>' +
+    '<div class="place">' + PLACE + '</div>';
+  var html = "";
+  for (var i = 1; i < d.time.length && i <= 3; i++) {
+    var dt = new Date(d.time[i] + "T12:00:00");
+    html += '<div class="day"><div class="n">' + DAYS[dt.getDay()].slice(0, 3) + '</div>' + icon(d.weather_code[i]) +
+      '<div class="hl">' + Math.round(d.temperature_2m_max[i]) + '°<span class="lo">' + Math.round(d.temperature_2m_min[i]) + '°</span></div>' +
+      '<div class="rain">' + (d.precipitation_probability_max[i] || 0) + '% rain</div></div>';
+  }
+  document.getElementById("days").innerHTML = html;
+  SCENE.weather = c.weather_code; SCENE.cloud = c.cloud_cover || 0;
+  SCENE.sunrise = d.sunrise ? d.sunrise[0] : null; SCENE.sunset = d.sunset ? d.sunset[0] : null;
+  setScene();
+  var mins = Math.round((Date.now() - fetchedAt) / 60000);
+  document.getElementById("stale").textContent = mins > 45 ? "Weather from " + mins + " min ago" : "";
+}
+
+function loadWeather() {
+  var url = "https://api.open-meteo.com/v1/forecast?latitude=" + LAT + "&longitude=" + LON +
+    "&current=temperature_2m,apparent_temperature,weather_code,cloud_cover,is_day" +
+    "&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset" +
+    "&timezone=" + encodeURIComponent(TZ) + "&forecast_days=4";
+  var x = new XMLHttpRequest();
+  x.open("GET", url, true);
+  x.timeout = 15000;
+  x.onload = function () {
+    if (x.status !== 200) return showCached();
+    try {
+      var w = JSON.parse(x.responseText), now = Date.now();
+      try { localStorage.setItem("wx", JSON.stringify({ w: w, t: now })); } catch (e) {}
+      render(w, now);
+    } catch (e) { showCached(); }
+  };
+  x.onerror = x.ontimeout = showCached;
+  x.send();
+}
+function showCached() {
+  try {
+    var c = JSON.parse(localStorage.getItem("wx"));
+    if (c) render(c.w, c.t);
+  } catch (e) {}
+}
+
+// ================= animated background =================
+var SCENE = { weather: 0, cloud: 0, sunrise: null, sunset: null };
+var DEMO = (location.search.match(/demo=([a-z-]+)/) || [])[1];
+
+function hm(iso) { // "2026-10-27T05:52" -> minutes since midnight
+  if (!iso) return null; var t = iso.split("T")[1].split(":"); return (+t[0]) * 60 + (+t[1]);
+}
+function nowMinutes() {
+  var p = sydneyParts(), h = +p.h % 12; if (p.ap === "pm") h += 12; return h * 60 + (+p.m);
+}
+function lerp(a, b, t) { return a + (b - a) * t; }
+function mix(c1, c2, t) { // hex colours
+  var a = parseInt(c1.slice(1), 16), b = parseInt(c2.slice(1), 16);
+  var r = Math.round(lerp(a >> 16, b >> 16, t)), g = Math.round(lerp(a >> 8 & 255, b >> 8 & 255, t)), bl = Math.round(lerp(a & 255, b & 255, t));
+  return "rgb(" + r + "," + g + "," + bl + ")";
+}
+// sky key colours [top, horizon]
+var SKY = { night: ["#03050b", "#0b1326"], dawn: ["#141a33", "#7a4e4a"], day: ["#0e2236", "#2f5169"],
+            dusk: ["#120d22", "#6a3a43"] };
+function phase(min) {
+  var rise = hm(SCENE.sunrise) || 360, set = hm(SCENE.sunset) || 1140, w = 50;
+  if (min < rise - w || min > set + w) return { a: "night", b: "night", t: 0 };
+  if (min < rise) return { a: "night", b: "dawn", t: (min - (rise - w)) / w };
+  if (min < rise + w) return { a: "dawn", b: "day", t: (min - rise) / w };
+  if (min < set - w) return { a: "day", b: "day", t: 0 };
+  if (min < set) return { a: "day", b: "dusk", t: (min - (set - w)) / w };
+  return { a: "dusk", b: "night", t: (min - set) / w };
+}
+function kind(code) {
+  if (code === 0 || code === 1) return "clear";
+  if (code === 2 || code === 3) return "cloud";
+  if (code <= 48) return "fog";
+  if (code >= 95) return "storm";
+  return "rain";
+}
+var FX = { kind: "clear", night: true, rainN: 0, cloudN: 0, clouds: [], stars: [], drops: [], mist: [] };
+function setScene() {
+  var min = nowMinutes(), code = SCENE.weather;
+  if (DEMO) { // demo=night-clear | dawn-cloud | day-rain | dusk-storm ...
+    var d = DEMO.split("-"), at = { night: 1380, dawn: (hm(SCENE.sunrise) || 360) + 5, day: 780, dusk: (hm(SCENE.sunset) || 1140) - 5 };
+    min = at[d[0]] || min; code = { clear: 0, cloud: 3, rain: 63, storm: 95, fog: 45 }[d[1]]; SCENE.cloud = d[1] === "cloud" ? 85 : d[1] === "clear" ? 5 : 100;
+  }
+  var ph = phase(min), top = mix(SKY[ph.a][0], SKY[ph.b][0], ph.t), hor = mix(SKY[ph.a][1], SKY[ph.b][1], ph.t);
+  var k = kind(code), grey = k === "clear" ? 0 : k === "cloud" ? Math.min(.55, SCENE.cloud / 160) : .6;
+  top = blendGrey(top, grey); hor = blendGrey(hor, grey);
+  document.getElementById("sky").style.background = "linear-gradient(to bottom, " + top + " 0%, " + hor + " 100%)";
+  FX.kind = k; FX.night = (ph.a === "night" && ph.b === "night") || (ph.a === "dusk" && ph.t > .6) || (ph.b === "dawn" && ph.t < .4);
+  FX.rainN = k === "storm" ? 320 : k === "rain" ? (code <= 57 || code === 80 ? 140 : 260) : 0;
+  FX.cloudN = k === "clear" ? 2 : k === "fog" ? 0 : k === "cloud" ? 7 : 9;
+  buildFx();
+}
+function blendGrey(rgb, t) {
+  var m = rgb.match(/\d+/g), g = 26; // towards #1a1a1a-ish
+  return "rgb(" + Math.round(lerp(+m[0], g + 4, t)) + "," + Math.round(lerp(+m[1], g + 5, t)) + "," + Math.round(lerp(+m[2], g + 8, t)) + ")";
+}
+
+var cv = document.getElementById("fx"), cx = cv.getContext("2d"), W = 0, H = 0;
+function size() { W = cv.width = Math.round(window.innerWidth / 2); H = cv.height = Math.round(window.innerHeight / 2); buildFx(); }
+// canvas at half resolution: cheap for TV GPUs, and everything on it is soft anyway
+function rnd(a, b) { return a + Math.random() * (b - a); }
+function buildFx() {
+  if (!W) return;
+  var i;
+  FX.stars = []; if (FX.night && FX.kind !== "rain" && FX.kind !== "storm" && FX.kind !== "fog")
+    for (i = 0; i < 140; i++) FX.stars.push({ x: rnd(0, W), y: rnd(0, H * .7), r: rnd(.3, 1.1), p: rnd(0, 6.28), s: rnd(.4, 1.4) });
+  while (FX.clouds.length < FX.cloudN) FX.clouds.push({ x: rnd(-W * .3, W), y: rnd(H * .02, H * .45), r: rnd(H * .18, H * .38), v: rnd(2, 6), a: rnd(.05, .11) });
+  FX.clouds.length = FX.cloudN;
+  while (FX.drops.length < FX.rainN) FX.drops.push({ x: rnd(0, W * 1.2), y: rnd(-H, H), v: rnd(380, 560), l: rnd(8, 18) });
+  FX.drops.length = FX.rainN;
+  FX.mist = []; if (FX.kind === "fog") for (i = 0; i < 6; i++) FX.mist.push({ y: rnd(H * .2, H * .9), h: rnd(H * .08, H * .18), x: rnd(0, W), v: rnd(4, 10) });
+}
+var last = 0, nextFlash = 0;
+function frame(ts) {
+  requestAnimationFrame(frame);
+  if (ts - last < 33) return; // ~30 fps is plenty for ambience
+  var dt = Math.min(.1, (ts - last) / 1000); last = ts;
+  cx.clearRect(0, 0, W, H);
+  var i, o, t = ts / 1000;
+  for (i = 0; i < FX.stars.length; i++) {           // stars
+    o = FX.stars[i]; cx.globalAlpha = .35 + .45 * Math.sin(t * o.s + o.p);
+    cx.fillStyle = "#fff"; cx.beginPath(); cx.arc(o.x, o.y, o.r, 0, 6.29); cx.fill();
+  }
+  cx.globalAlpha = 1;
+  if (FX.kind === "clear" && !FX.night) {          // soft sun glow, slowly breathing
+    var g = cx.createRadialGradient(W * .78, H * .18, 0, W * .78, H * .18, H * .55);
+    g.addColorStop(0, "rgba(255,226,170," + (.16 + .03 * Math.sin(t * .3)) + ")"); g.addColorStop(1, "rgba(255,226,170,0)");
+    cx.fillStyle = g; cx.fillRect(0, 0, W, H);
+  }
+  for (i = 0; i < FX.clouds.length; i++) {          // drifting cloud blobs
+    o = FX.clouds[i]; o.x += o.v * dt; if (o.x - o.r > W) o.x = -o.r * 1.5;
+    var c = cx.createRadialGradient(o.x, o.y, 0, o.x, o.y, o.r);
+    var tint = FX.night ? "170,180,205" : "215,220,230";
+    c.addColorStop(0, "rgba(" + tint + "," + o.a + ")"); c.addColorStop(1, "rgba(" + tint + ",0)");
+    cx.fillStyle = c; cx.beginPath(); cx.ellipse ? cx.ellipse(o.x, o.y, o.r * 1.7, o.r, 0, 0, 6.29) : cx.arc(o.x, o.y, o.r, 0, 6.29); cx.fill();
+  }
+  for (i = 0; i < FX.mist.length; i++) {            // fog bands
+    o = FX.mist[i]; o.x += o.v * dt; if (o.x > W) o.x -= W;
+    var m = cx.createLinearGradient(0, o.y - o.h, 0, o.y + o.h);
+    m.addColorStop(0, "rgba(200,205,212,0)"); m.addColorStop(.5, "rgba(200,205,212,.08)"); m.addColorStop(1, "rgba(200,205,212,0)");
+    cx.fillStyle = m; cx.fillRect(0, o.y - o.h, W, o.h * 2);
+  }
+  if (FX.drops.length) {                            // rain streaks
+    cx.strokeStyle = FX.night ? "rgba(170,190,220,.32)" : "rgba(200,215,235,.35)"; cx.lineWidth = .8; cx.beginPath();
+    for (i = 0; i < FX.drops.length; i++) {
+      o = FX.drops[i]; o.y += o.v * dt; o.x -= o.v * .12 * dt;
+      if (o.y > H) { o.y = rnd(-40, -5); o.x = rnd(0, W * 1.2); }
+      cx.moveTo(o.x, o.y); cx.lineTo(o.x + o.l * .12, o.y - o.l);
+    }
+    cx.stroke();
+  }
+  if (FX.kind === "storm" && ts > nextFlash) {      // occasional lightning
+    var f = document.getElementById("flash"); f.style.opacity = .22;
+    setTimeout(function () { f.style.opacity = 0; }, 90);
+    setTimeout(function () { f.style.opacity = .12; setTimeout(function () { f.style.opacity = 0; }, 70); }, 220);
+    nextFlash = ts + rnd(7000, 16000);
+  }
+}
+window.onresize = size;
+size(); setScene();
+setInterval(setScene, 60 * 1000); // sky follows the time of day
+requestAnimationFrame(frame);
+
+// ================= "Send to TV": open a page sent from the hub =================
+// The hub's LAN address comes from the URL (?hub=host:port), so it never lives in this public repo.
+// Served from the hub itself, the page uses its own origin instead.
+var HUB = (location.search.match(/[?&]hub=([\w.:-]+)/) || [])[1];
+var PENDING_URL = location.protocol === "http:" && !HUB ? "/api/tv/pending" : (HUB ? "http://" + HUB + "/api/tv/pending" : null);
+function checkPending() {
+  if (!PENDING_URL) return;
+  var x = new XMLHttpRequest();
+  try { x.open("GET", PENDING_URL + "?t=" + Date.now(), true); } catch (e) { return; }
+  x.timeout = 4000;
+  x.onload = function () {
+    try {
+      var r = JSON.parse(x.responseText);
+      if (r && r.url && /^https?:\/\//i.test(r.url)) location.href = r.url;
+    } catch (e) {}
+  };
+  try { x.send(); } catch (e) {}
+}
+checkPending();
+setInterval(checkPending, 3000);
+
+tick();
+setInterval(tick, 1000);
+showCached();
+loadWeather();
+setInterval(loadWeather, 15 * 60 * 1000);
+</script>
+</body>
+</html>
